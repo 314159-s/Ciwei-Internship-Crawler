@@ -1,0 +1,13 @@
+# 忽略浏览器缓存和登录 Session
+playwright_user_data/
+
+# 忽略本地抓取的数据结果
+ciwei_data.csv
+
+# 忽略 Python 运行缓存
+__pycache__/
+*.pyc
+
+# 忽略虚拟环境
+venv/
+.env
