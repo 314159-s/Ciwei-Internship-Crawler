@@ -1,7 +1,7 @@
 import asyncio
 import os
 import csv
-import re  # 导入正则库，用于强力清洗乱码
+import re
 from playwright.async_api import async_playwright
 
 
@@ -76,39 +76,45 @@ async def scrape_ciwei_robust():
                 # 打开详情页
                 await detail_page.goto(job['link'], wait_until="domcontentloaded", timeout=20000)
 
-                # 【关键点】等待 span 标签出现，这代表具体的描述文字已经渲染出来了
+                # 等待 span 标签出现，这代表具体的描述文字已经渲染出来了
                 try:
+                    # job-desc是模糊匹配，对应job-desc__3DHRK，而且还要等里面的span也加载出来才行
                     await detail_page.wait_for_selector("ul[class^='job-desc'] span", timeout=8000)
                 except:
                     # 如果超时，说明可能是另一种模板，多等 2 秒作为兜底
                     await detail_page.wait_for_timeout(2000)
 
-                # 详情页描述提取优化：寻找包含“工作职责”或“岗位要求”的父级容器
-                # 1. 尝试寻找最精准的描述列表
-                selectors = [
-                    "ul[class^='job-desc']",  # 你的 F12 截图里最核心的列表
-                    "div[class^='detail-wrap']"  # 包裹列表的大盒子
-                ]
-
+                # --- 优化后的逻辑：直接针对唯一的 ul 列表进行循环提取 ---
                 description = "未找到描述"
 
-                for selector in selectors:
-                    # 根据上面的可能的类名搜出所有可能标签
-                    desc_el = await detail_page.query_selector(selector)
-                    if desc_el:
-                        # 使用 inner_text 获取格式化好的文本
-                        raw_text = await desc_el.inner_text()
+                # 1. 尝试直接获取那个唯一的无序列表
+                ul_el = await detail_page.query_selector("ul[class^='job-desc']")
 
-                        # --- 【排版核心改进点：彻底清除 NBSP 并强制换行】 ---
-                        # A. 强力清除所有不可见的空格字符（包括 \xa0, \u2002 等）
-                        clean_text = re.sub(r'[\s\u00A0\u2000-\u200B\u202F\u205F\u3000]+', ' ', raw_text)
+                if ul_el:
+                    # 2. 循环获得每个选项的li内容，通过遍历li确保每一条后面都有换行
+                    li_elements = await ul_el.query_selector_all("li")
+                    lines = []
+                    for li in li_elements:
+                        # 获得li标签内（包含span）的格式化好文本
+                        text = await li.inner_text()
 
-                        # B. 处理换行：先按行分割，再重新用标准的系统换行符拼接
-                        lines = [line.strip() for line in clean_text.splitlines() if line.strip()]
+                        # 强力清除所有不可见的空格字符（包括 \xa0, \u2002 等）
+                        clean_line = re.sub(r'[\s\u00A0\u2000-\u200B\u202F\u205F\u3000]+', ' ', text).strip()
+
+                        if clean_line:
+                            lines.append(clean_line)
+
+                    # 3. 每次写入span内容后进行换行（用换行符连接列表）
+                    if lines:
                         description = "\n".join(lines)
 
-                        if len(description) > 30:
-                            break
+                # 保底逻辑：如果ul没拿到，再尝试通过大盒子获取
+                if description == "未找到描述" or len(description) < 10:
+                    wrap_el = await detail_page.query_selector("div[class^='detail-wrap']")
+                    if wrap_el:
+                        raw_text = await wrap_el.inner_text()
+                        clean_text = re.sub(r'[\s\u00A0\u2000-\u200B\u202F\u205F\u3000]+', ' ', raw_text)
+                        description = "\n".join([l.strip() for l in clean_text.splitlines() if l.strip()])
 
                 # 存下职位名称，内容，链接
                 final_results.append([job['title'], description, job['link']])
